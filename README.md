@@ -1,10 +1,22 @@
 # token-balance
 
-*This project was built using AI*
+Display your LLM API credit balance in any Wayland bar or terminal.
 
-Display your LLM API credit balance in any Wayland bar.
+## Supported Providers
 
-Supports **DeepSeek**, **OpenAI**, **OpenRouter** — outputs Waybar-compatible JSON.
+| Provider | Env Variable | Balance Endpoint | Display |
+|----------|-------------|-----------------|---------|
+| **OpenAI** | `OPENAI_API_KEY` | `/dashboard/billing/credit_grants` | Available $ |
+| **Anthropic (Claude)** | `ANTHROPIC_API_KEY` | `/v1/organizations/billing` | Credits $ |
+| **Google Gemini** | `GEMINI_API_KEY` | `/v1beta/models` (validates key) | "quota" |
+| **DeepSeek** | `DEEPSEEK_API_KEY` | `/user/balance` | ¥ or $ |
+| **OpenRouter** | `OPENROUTER_API_KEY` | `/api/v1/auth/key` | Credits $ |
+| **Together AI** | `TOGETHER_API_KEY` | `/api/v1/user/credits` | Credits $ |
+| **Fireworks AI** | `FIREWORKS_API_KEY` | `/v1/user` | Credits $ |
+| **SiliconFlow (硅基流动)** | `SILICONFLOW_API_KEY` | `/v1/user/info` | ¥ or "ok" |
+| **Groq** | `GROQ_API_KEY` | `/v1/user/status` | "active" |
+
+Use `--provider all` to try each in order and show the first that responds.
 
 ## Quick Start
 
@@ -14,18 +26,21 @@ pip install -r requirements.txt
 cp token-balance.py ~/.local/bin/token-balance
 chmod +x ~/.local/bin/token-balance
 
-# Test
+# Test a single provider
 token-balance --provider deepseek
 # → {"text": "¥15.71", "class": "online", "tooltip": "DeepSeek: ¥15.71 remaining"}
+
+# Try all configured providers (shows first available)
+token-balance --provider all
 ```
 
 ## Waybar Config
 
-Add a custom module to `~/.config/waybar/config.jsonc`:
+Add to `~/.config/waybar/config.jsonc`:
 
 ```jsonc
 "custom/token-balance": {
-    "exec": "token-balance --provider deepseek",
+    "exec": "token-balance --provider all",
     "interval": 120,
     "return-type": "json",
     "format": "{}",
@@ -44,79 +59,33 @@ With proxy (China users):
 }
 ```
 
-Multiple providers (shows first available):
-
-```jsonc
-"custom/token-balance": {
-    "exec": "token-balance --provider all",
-    "interval": 120,
-    "return-type": "json"
-}
-```
-
 ## API Keys
 
-The script reads keys from `~/.hermes/.env` by default:
+Keys are read from `~/.hermes/.env` by default. Set a custom env file:
 
+```bash
+TOKEN_BALANCE_ENV=*** token-balance --provider deepseek
+```
+
+The env file should contain lines like:
 ```
 DEEPSEEK_API_KEY=sk-...
 OPENAI_API_KEY=sk-...
-OPENROUTER_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Override with `TOKEN_BALANCE_ENV` environment variable:
+## Adding a New Provider
+
+1. Write a `XXX_balance(api_key, proxy)` function that returns a dict or None
+2. Add it to the `PROVIDERS` dict
+3. The env variable is auto-derived from the name: `xxx` → `XXX_API_KEY`
+4. Update this README
+
+## Proxy
+
+Auto-discovers proxies in order: explicit → Clash (7897) → Clash (7890) → v2raya (20171) → direct.
+Or set explicitly:
 
 ```bash
-export TOKEN_BALANCE_ENV=~/.config/my-keys.env
+token-balance --provider deepseek --proxy http://127.0.0.1:7897
 ```
-
-## Supported Providers
-
-| Provider | Key Env Var | Balance Endpoint |
-|----------|-------------|-----------------|
-| DeepSeek | `DEEPSEEK_API_KEY` | `/user/balance` |
-| OpenAI | `OPENAI_API_KEY` | `/dashboard/billing/credit_grants` |
-| OpenRouter | `OPENROUTER_API_KEY` | `/api/v1/auth/key` |
-
-Add more by writing a handler function and adding it to the `PROVIDERS` dict.
-
-## Output Format
-
-```json
-{
-    "text": "¥15.71",
-    "class": "online",
-    "alt": "deepseek-CNY",
-    "tooltip": "DeepSeek: ¥15.71 remaining"
-}
-```
-
-- `online` / `offline` CSS class for styling
-- Tooltip shows details on hover
-
-## Waybar Styling
-
-Add to `~/.config/waybar/style.css`:
-
-```css
-#custom-token-balance {
-    padding: 0 8px;
-    font-weight: 600;
-}
-#custom-token-balance.offline {
-    color: #f87171;
-}
-#custom-token-balance.online {
-    color: #e0e8f0;
-}
-```
-
-## Other Bars
-
-- **EWW / AGS**: parse the JSON output and render in a window
-- **niri**: works via Waybar or any bar with custom command support
-- **Sway / Hyprland / river**: same — any bar that supports `exec` + JSON parsing
-
-## License
-
-MIT

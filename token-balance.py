@@ -35,11 +35,41 @@ def read_env_var(filename, name):
 
 def try_curl(url, auth_header, proxy=None):
     cmd = ["curl", "-s", "--max-time", "8"]
+
+    # Try proxies in order: explicit → Clash → v2raya → direct
+    proxies_to_try = []
     if proxy:
-        cmd += ["-x", proxy]
-    cmd += ["-H", auth_header, url]
+        proxies_to_try = [proxy]
+    else:
+        for host, port in [("127.0.0.1", 7897), ("127.0.0.1", 7890),
+                           ("127.0.0.1", 20171), ("127.0.0.1", 1080)]:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.3)
+            if s.connect_ex((host, port)) == 0:
+                proxies_to_try.append(f"http://{host}:{port}")
+            s.close()
+        proxies_to_try.append(None)  # direct as last resort
+
+    for p in proxies_to_try:
+        try:
+            c = cmd[:]
+            if p:
+                c += ["-x", p]
+            c += ["-H", auth_header, url]
+            r = subprocess.run(c, capture_output=True, text=True, timeout=8)
+            out = r.stdout.strip()
+            if out:
+                data = json.loads(out)
+                if isinstance(data, dict) and data.get("is_available") is not None:
+                    return data
+        except Exception:
+            continue
+
+    # Final fallback
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
+        r = subprocess.run(cmd + ["-H", auth_header, url],
+                           capture_output=True, text=True, timeout=8)
         return json.loads(r.stdout) if r.stdout.strip() else {}
     except Exception:
         return {}
@@ -97,10 +127,160 @@ def openrouter_balance(api_key, proxy):
         }
     return None
 
+def groq_balance(api_key, proxy):
+    """Groq doesn't expose a balance API, but /v1/user/status returns usage."""
+    data = try_curl(
+        "https://api.groq.com/openai/v1/user/status",
+        "Authorization: " + "Bearer" + " " + api_key,
+        proxy
+    )
+    if data and "sessions" in data:
+        return {
+            "text": "active",
+            "class": "online",
+            "alt": "groq",
+            "tooltip": "Groq: pay-as-you-go (no pre-paid balance)"
+        }
+    return None
+
+def siliconflow_balance(api_key, proxy):
+    data = try_curl(
+        "https://api.siliconflow.cn/v1/user/info",
+        "Authorization: " + "Bearer" + " " + api_key,
+        proxy
+    )
+    if data and isinstance(data, dict):
+        # Try different response shapes
+        balance = data.get("balance")
+        if balance is not None:
+            amt = float(balance)
+            return {
+                "text": f"¥{amt:.2f}",
+                "class": "online",
+                "alt": "siliconflow-cny",
+                "tooltip": f"SiliconFlow: ¥{amt:.2f} remaining"
+            }
+        # Fallback: check for totalBalance or similar
+        tb = data.get("totalBalance") or data.get("total_balance")
+        if tb is not None:
+            return {
+                "text": f"¥{float(tb):.2f}",
+                "class": "online",
+                "alt": "siliconflow-cny",
+                "tooltip": f"SiliconFlow: ¥{float(tb):.2f} remaining"
+            }
+        # If we got a valid response but no balance field, show available
+        if data.get("is_available") or data.get("id") or data.get("userId"):
+            return {
+                "text": "ok",
+                "class": "online",
+                "alt": "siliconflow",
+                "tooltip": "SiliconFlow: account active (balance unknown)"
+            }
+    return None
+
+def together_balance(api_key, proxy):
+    """Together AI: /api/v1/user/credits → credits"""
+    data = try_curl(
+        "https://api.together.xyz/api/v1/user/credits",
+        "Authorization: " + "Bearer" + " " + api_key,
+        proxy
+    )
+    if data and isinstance(data, dict):
+        c = data.get("credits")
+        if c is not None:
+            return {
+                "text": f"${float(c):.2f}",
+                "class": "online",
+                "alt": "together-usd",
+                "tooltip": f"Together AI: ${float(c):.2f} credits"
+            }
+    return None
+
+def fireworks_balance(api_key, proxy):
+    """Fireworks AI: /v1/user → credits"""
+    data = try_curl(
+        "https://api.fireworks.ai/v1/user",
+        "Authorization: " + "Bearer" + " " + api_key,
+        proxy
+    )
+    if data and isinstance(data, dict):
+        c = data.get("credits")
+        if c is not None:
+            return {
+                "text": f"${float(c):.2f}",
+                "class": "online",
+                "alt": "fireworks-usd",
+                "tooltip": f"Fireworks AI: ${float(c):.2f} credits"
+            }
+    return None
+
+def anthropic_balance(api_key, proxy):
+    """Anthropic: /v1/organizations/billing → credits.
+       Requires an org-level API key (Console → Settings → API Keys)."""
+    data = try_curl(
+        "https://api.anthropic.com/v1/organizations/billing",
+        "x-api-key: " + api_key,
+        proxy
+    )
+    if data and isinstance(data, dict):
+        c = data.get("credits")
+        if c is not None:
+            sym = "$"
+            amt = float(c)
+            return {
+                "text": f"{sym}{amt:.2f}",
+                "class": "online",
+                "alt": "anthropic-usd",
+                "tooltip": f"Anthropic (Claude): {sym}{amt:.2f} credits"
+            }
+        # Check for balance in nested structure
+        bal = data.get("balance") or data.get("total_balance")
+        if bal is not None:
+            return {
+                "text": f"${float(bal):.2f}",
+                "class": "online",
+                "alt": "anthropic-usd",
+                "tooltip": f"Anthropic (Claude): ${float(bal):.2f} remaining"
+            }
+        # Valid response but unknown field shape
+        if data.get("organization_id") or data.get("id"):
+            return {
+                "text": "ok",
+                "class": "online",
+                "alt": "anthropic",
+                "tooltip": "Anthropic (Claude): reachable (balance unknown)"
+            }
+    return None
+
+def gemini_balance(api_key, proxy):
+    """Google Gemini: no prepaid balance (quota-based via GCP).
+       Check API key validity via model list instead."""
+    data = try_curl(
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        "x-goog-api-key: " + api_key,
+        proxy
+    )
+    if data and isinstance(data, dict):
+        if "models" in data or data.get("models"):
+            return {
+                "text": "quota",
+                "class": "online",
+                "alt": "gemini",
+                "tooltip": "Gemini: pay-per-use (quota-based, no pre-paid balance)"
+            }
+    return None
+
 PROVIDERS = {
-    "deepseek": deepseek_balance,
     "openai": openai_balance,
+    "anthropic": anthropic_balance,
+    "gemini": gemini_balance,
+    "deepseek": deepseek_balance,
     "openrouter": openrouter_balance,
+    "together": together_balance,
+    "fireworks": fireworks_balance,
+    "siliconflow": siliconflow_balance,
+    "groq": groq_balance,
 }
 
 def main():
