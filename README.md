@@ -1,6 +1,6 @@
 # token-balance
 
-#this project was built using AI#
+#this project was built using AI
 
 Display your LLM API credit balance in any Wayland bar or terminal.
 
